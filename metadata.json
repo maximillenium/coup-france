@@ -1,0 +1,8 @@
+{
+  "name": "CoupFranc",
+  "description": "Guide et comparateur indépendant des bookmakers, bonus, codes promo et pronostics sportifs en français.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

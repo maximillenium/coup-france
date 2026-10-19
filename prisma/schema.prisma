@@ -1,0 +1,171 @@
+// CoupFranc Prisma Schema for PostgreSQL
+// Production ready for self-managed Linux VPS deployment
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum PublicationStatus {
+  published
+  draft
+}
+
+enum AdminRole {
+  admin
+  editor
+}
+
+enum OfferType {
+  Bienvenue
+  Freebet
+  Depot
+  Cashback
+  Combine
+}
+
+enum SportType {
+  Football
+  Basketball
+  Tennis
+  Rugby
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         AdminRole @default(admin)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("admin_users")
+}
+
+model Bookmaker {
+  id                String            @id @default(cuid())
+  name              String            @unique
+  slug              String            @unique
+  logo              String
+  rating            Float             @default(4.5)
+  bonusSummary      String
+  promoCode         String
+  affiliateUrl      String
+  ctaLabel          String            @default("Profiter de l'offre")
+  offerTerms        String            @db.Text
+  shortDescription  String            @db.Text
+  fullDescription   String            @db.Text
+  features          String[]
+  depositMethods    String[]
+  withdrawalMethods String[]
+  minDeposit        String            @default("1 €")
+  isFeatured        Boolean           @default(false)
+  status            PublicationStatus @default(published)
+  expirationDate    DateTime?
+  seoTitle          String?
+  seoDescription    String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  offers            PromotionalOffer[]
+
+  @@index([status])
+  @@index([isFeatured])
+  @@map("bookmakers")
+}
+
+model PromotionalOffer {
+  id             String            @id @default(cuid())
+  bookmakerId    String
+  bookmakerName  String
+  title          String
+  slug           String            @unique
+  offerType      OfferType         @default(Bienvenue)
+  bonusAmount    String
+  promoCode      String
+  affiliateUrl   String
+  ctaLabel       String            @default("Activer l'offre")
+  terms          String            @db.Text
+  expirationDate DateTime?
+  isFeatured     Boolean           @default(false)
+  status         PublicationStatus @default(published)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  bookmaker      Bookmaker         @relation(fields: [bookmakerId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([bookmakerId])
+  @@map("promotional_offers")
+}
+
+model SportsPrediction {
+  id                  String            @id @default(cuid())
+  title               String
+  slug                String            @unique
+  sport               SportType         @default(Football)
+  competition         String
+  homeTeam            String
+  awayTeam            String
+  homeLogo            String?
+  awayLogo            String?
+  eventDate           DateTime
+  eventTime           String
+  predictionChoice    String
+  odds                String
+  confidencePercent   Int               @default(70)
+  recommendedBookmaker String
+  editorialAnalysis   String            @db.Text
+  statisticsJson      Json?
+  isFeatured          Boolean           @default(false)
+  status              PublicationStatus @default(published)
+  seoTitle            String?
+  seoDescription      String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([status])
+  @@index([competition])
+  @@index([eventDate])
+  @@map("sports_predictions")
+}
+
+model Article {
+  id             String            @id @default(cuid())
+  title          String
+  slug           String            @unique
+  excerpt        String            @db.Text
+  content        String            @db.Text
+  featuredImage  String
+  imageAlt       String
+  category       String
+  author         String            @default("La Rédaction CoupFranc")
+  readingTime    String            @default("4 min")
+  isFeatured     Boolean           @default(false)
+  status         PublicationStatus @default(published)
+  publishedAt    DateTime?
+  seoTitle       String?
+  seoDescription String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([status])
+  @@index([category])
+  @@index([publishedAt])
+  @@map("articles")
+}
+
+model InformationalPage {
+  slug            String   @id
+  title           String
+  metaDescription String
+  content         String   @db.Text
+  updatedAt       DateTime @updatedAt
+
+  @@map("informational_pages")
+}
