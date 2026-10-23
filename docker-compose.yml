@@ -1,8 +1,8 @@
 # Docker Compose for CoupFranc on a self-managed Linux VPS (Ubuntu/Debian)
-# Low-cost, high-performance, non-exposed database setup.
+# Self-contained, persistent volume storage with zero external database dependencies.
 
 services:
-  # Web Application (Node.js + Express + React client build)
+  # Web Application (Node.js 22 + Express + Vite React client)
   app:
     build:
       context: .
@@ -10,50 +10,25 @@ services:
     container_name: coupfranc_app
     restart: unless-stopped
     ports:
+      # Expose only to localhost (reverse proxy Nginx routes public traffic)
       - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
       - APP_URL=${APP_URL:-https://coupfranc.fr}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-coupfranc}:${POSTGRES_PASSWORD:-ChangeThisPasswordSecurely!}@postgres:5432/${POSTGRES_DB:-coupfranc_db}?schema=public
       - JWT_SECRET=${JWT_SECRET:-generate-a-strong-32-char-random-jwt-secret-string}
+      - TRUST_PROXY_HOPS=1
     volumes:
-      - uploads_data:/app/data/uploads
-      - local_data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - internal_network
-
-  # Isolated PostgreSQL Database (Internal only, not exposed to internet)
-  postgres:
-    image: postgres:16-alpine
-    container_name: coupfranc_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-coupfranc}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisPasswordSecurely!}
-      POSTGRES_DB: ${POSTGRES_DB:-coupfranc_db}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Persistent volume for atomic database and uploads
+      - coupfranc_data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-coupfranc} -d ${POSTGRES_DB:-coupfranc_db}"]
-      interval: 10s
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
       timeout: 5s
-      retries: 5
-    networks:
-      - internal_network
+      retries: 3
+      start_period: 10s
 
 volumes:
-  postgres_data:
-    name: coupfranc_pgdata
-  uploads_data:
-    name: coupfranc_uploads
-  local_data:
-    name: coupfranc_appdata
+  coupfranc_data:
+    name: coupfranc_data
 
-networks:
-  internal_network:
-    name: coupfranc_network
-    driver: bridge

@@ -66,26 +66,27 @@ cp .env.example .env
 nano .env
 ```
 
-Générez une clé JWT secrète et un mot de passe de base de données robuste :
+Générez une clé JWT secrète :
 ```bash
-# Générer une clé de 64 caractères aléatoires
+# Générer une clé de 64 caractères hexadécimaux
 openssl rand -hex 32
 ```
 
 Renseignez dans votre `.env` :
 - `APP_URL=https://coupfranc.fr`
 - `JWT_SECRET=<votre_cle_generee>`
-- `POSTGRES_PASSWORD=<mot_de_passe_robuste>`
+- `TRUST_PROXY_HOPS=1`
 
-Lancez les conteneurs :
+Lancez l'application :
 
 ```bash
 docker compose up -d --build
 ```
 
-Vérifiez le statut :
+Vérifiez le statut du conteneur et la sonde de santé :
 ```bash
 docker compose ps
+curl -I http://127.0.0.1:3000/api/health
 docker compose logs -f app
 ```
 
@@ -137,54 +138,39 @@ sudo certbot --nginx -d coupfranc.fr -d www.coupfranc.fr
 
 ## 5. Procédure de Sauvegarde Automatisée
 
-Créez le script `/opt/coupfranc/scripts/backup.sh` :
-
-```bash
-#!/bin/bash
-BACKUP_DIR="/var/backups/coupfranc"
-DATE=$(date +%Y-%m-%d_%H%M%S)
-
-mkdir -p $BACKUP_DIR
-
-# 1. Sauvegarde de la base de données PostgreSQL
-docker exec coupfranc_postgres pg_dump -U coupfranc coupfranc_db | gzip > "$BACKUP_DIR/db_$DATE.sql.gz"
-
-# 2. Sauvegarde des images téléversées
-tar -czf "$BACKUP_DIR/uploads_$DATE.tar.gz" -C /opt/coupfranc/data uploads
-
-# 3. Suppression des sauvegardes de plus de 30 jours
-find $BACKUP_DIR -type f -mtime +30 -delete
-
-echo "Sauvegarde CoupFranc terminée avec succès le $DATE"
-```
-
-Rendez-le exécutable et ajoutez-le au cron quotidien :
+Le projet inclut un script de sauvegarde automatique dans `scripts/backup.sh` qui archive atomiquement `data/database.json` et le dossier des téléversements `data/uploads/` :
 
 ```bash
 chmod +x /opt/coupfranc/scripts/backup.sh
+/opt/coupfranc/scripts/backup.sh
+```
+
+Pour planifier la sauvegarde quotidienne chaque nuit à 03h00 avec rétention sur 30 jours :
+
+```bash
 (crontab -l 2>/dev/null; echo "0 3 * * * /opt/coupfranc/scripts/backup.sh >> /var/log/coupfranc_backup.log 2>&1") | crontab -
 ```
+
+Les archives compressées sont créées sous `/var/backups/coupfranc/coupfranc_backup_YYYY-MM-DD_HHMMSS.tar.gz`.
 
 ---
 
 ## 6. Procédure de Restauration
 
-Pour restaurer une sauvegarde :
+Pour restaurer une sauvegarde précédente à tout moment :
 
 ```bash
-# Restaurer la base de données
-gunzip < /var/backups/coupfranc/db_YYYY-MM-DD_HHMMSS.sql.gz | docker exec -i coupfranc_postgres psql -U coupfranc -d coupfranc_db
-
-# Restaurer les images
-tar -xzf /var/backups/coupfranc/uploads_YYYY-MM-DD_HHMMSS.tar.gz -C /opt/coupfranc/data
+chmod +x /opt/coupfranc/scripts/restore.sh
+/opt/coupfranc/scripts/restore.sh /var/backups/coupfranc/coupfranc_backup_YYYY-MM-DD_HHMMSS.tar.gz
 ```
+
+Le script extrait automatiquement l'archive dans le volume persistant et recharge le conteneur CoupFranc sans perte de configuration.
 
 ---
 
 ## 7. Premier Accès Administrateur
 
 1. Accédez à `https://coupfranc.fr/admin`
-2. Identifiants initiaux :
-   - **Email :** `admin@coupfranc.fr`
-   - **Mot de passe initial :** `AdminCoupFranc2026!`
-3. Modifiez impérativement le mot de passe dès la première connexion via l'onglet **Sécurité** du tableau de bord.
+2. Connectez-vous avec l'identifiant administrateur provisionné (`admin`).
+3. Modifiez immédiatement le mot de passe depuis l'interface d'administration (bouton **Changer le mot de passe** / **Sécurité**).
+4. Le nouveau mot de passe est immédiatement hashé avec bcrypt (10 tours) et persisté dans le volume de stockage persistant.

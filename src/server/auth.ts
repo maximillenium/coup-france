@@ -64,6 +64,61 @@ export function hashPassword(plain: string): string {
   return bcrypt.hashSync(plain, 10);
 }
 
+export function getClientIp(req: Request): string {
+  // 1. If Nginx sets X-Real-IP ($remote_addr), this cannot be spoofed by downstream clients
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) {
+    let ip = realIp.trim();
+    if (ip.startsWith('::ffff:')) ip = ip.replace('::ffff:', '');
+    if (ip === '::1') ip = '127.0.0.1';
+    return ip;
+  }
+
+  // 2. Use Express-evaluated req.ip (strictly respects app.set('trust proxy', ...))
+  if (req.ip) {
+    let ip = req.ip;
+    if (ip.startsWith('::ffff:')) ip = ip.replace('::ffff:', '');
+    if (ip === '::1') ip = '127.0.0.1';
+    return ip;
+  }
+
+  // 3. Fallback to X-Forwarded-For or raw socket
+  let ip = req.headers['x-forwarded-for'];
+  if (typeof ip === 'string') {
+    ip = ip.split(',')[0].trim();
+  } else {
+    ip = req.socket?.remoteAddress || '127.0.0.1';
+  }
+  if (ip.startsWith('::ffff:')) {
+    ip = ip.replace('::ffff:', '');
+  }
+  if (ip === '::1') {
+    ip = '127.0.0.1';
+  }
+  return ip;
+}
+
+export function isUserAuthenticated(req: Request): boolean {
+  let token: string | undefined = req.cookies?.auth_token;
+
+  if (!token && req.headers.authorization) {
+    const parts = req.headers.authorization.split(' ');
+    if (parts.length === 2 && parts[0] === 'Bearer') {
+      token = parts[1];
+    }
+  }
+
+  if (!token) return false;
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string; role: string };
+    const user = db.findUserById(decoded.id);
+    return !!user;
+  } catch {
+    return false;
+  }
+}
+
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;

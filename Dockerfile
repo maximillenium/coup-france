@@ -21,7 +21,7 @@ ENV PORT=3000
 
 # Install production dependencies only
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copy built frontend assets and server files
 COPY --from=builder /app/dist ./dist
@@ -37,4 +37,7 @@ USER appuser
 
 EXPOSE 3000
 
-CMD ["npx", "tsx", "server.ts"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
+
+CMD ["node_modules/.bin/tsx", "server.ts"]

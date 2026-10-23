@@ -457,17 +457,23 @@ class DatabaseService {
       if (fs.existsSync(DB_FILE)) {
         const fileContent = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(fileContent);
-        let users = parsed.users || INITIAL_DATABASE.users;
-        const adminIndex = users.findIndex((u: any) => u.email === 'admin' || u.email === 'admin@coupfranc.fr');
+        let users: AdminUserData[] = parsed.users || [];
+
+        const adminIndex = users.findIndex(
+          (u: any) => u.email === 'admin' || u.email === 'admin@coupfranc.fr'
+        );
+
         if (adminIndex >= 0) {
+          // Normalize email to 'admin' while preserving the existing passwordHash!
           users[adminIndex] = {
             ...users[adminIndex],
             email: 'admin',
-            name: 'Администратор',
-            passwordHash: defaultAdminPasswordHash,
+            name: users[adminIndex].name || 'Администратор',
+            passwordHash: users[adminIndex].passwordHash || defaultAdminPasswordHash,
             role: 'admin',
           };
         } else {
+          // No administrator exists in existing DB, initialize default admin
           users.unshift({
             id: 'usr_admin_1',
             email: 'admin',
@@ -477,13 +483,13 @@ class DatabaseService {
             createdAt: '2026-01-01T00:00:00Z',
           });
         }
-        const loaded = {
+
+        const loaded: AppDatabase = {
           ...INITIAL_DATABASE,
           ...parsed,
           users,
           pages: { ...INITIAL_DATABASE.pages, ...(parsed.pages || {}) },
         };
-        // Save back to ensure updated admin user is persisted
         this.saveDatabase(loaded);
         return loaded;
       }
@@ -523,7 +529,15 @@ class DatabaseService {
   }
 
   findUserByEmail(email: string): AdminUserData | undefined {
-    return this.data.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    const normalized = email.trim().toLowerCase();
+    return this.data.users.find((u) => {
+      const uEmail = u.email.toLowerCase();
+      return (
+        uEmail === normalized ||
+        (normalized === 'admin' && uEmail.includes('admin')) ||
+        (normalized === 'admin@coupfranc.fr' && uEmail === 'admin')
+      );
+    });
   }
 
   findUserById(id: string): AdminUserData | undefined {

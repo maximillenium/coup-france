@@ -15,34 +15,46 @@ function getAuthHeader(): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = {
+    ...getAuthHeader(),
+    ...(init.headers || {}),
+  };
+  return fetch(input, {
+    ...init,
+    headers,
+    credentials: 'same-origin',
+  });
+}
+
 export const api = {
   // --- Public APIs ---
   async getBookmakers(all = false): Promise<Bookmaker[]> {
-    const res = await fetch(`${API_BASE}/api/bookmakers${all ? '?all=true' : ''}`);
+    const res = await apiFetch(`${API_BASE}/api/bookmakers${all ? '?all=true' : ''}`);
     if (!res.ok) throw new Error('Erreur lors du chargement des bookmakers');
     return res.json();
   },
 
   async getBookmakerBySlug(slug: string): Promise<Bookmaker> {
-    const res = await fetch(`${API_BASE}/api/bookmakers/${slug}`);
+    const res = await apiFetch(`${API_BASE}/api/bookmakers/${slug}`);
     if (!res.ok) throw new Error('Bookmaker introuvable');
     return res.json();
   },
 
   async getOffers(all = false): Promise<PromotionalOffer[]> {
-    const res = await fetch(`${API_BASE}/api/offers${all ? '?all=true' : ''}`);
+    const res = await apiFetch(`${API_BASE}/api/offers${all ? '?all=true' : ''}`);
     if (!res.ok) throw new Error('Erreur lors du chargement des bonus');
     return res.json();
   },
 
   async getPredictions(all = false): Promise<SportsPrediction[]> {
-    const res = await fetch(`${API_BASE}/api/predictions${all ? '?all=true' : ''}`);
+    const res = await apiFetch(`${API_BASE}/api/predictions${all ? '?all=true' : ''}`);
     if (!res.ok) throw new Error('Erreur lors du chargement des pronostics');
     return res.json();
   },
 
   async getPredictionBySlug(slug: string): Promise<SportsPrediction> {
-    const res = await fetch(`${API_BASE}/api/predictions/${slug}`);
+    const res = await apiFetch(`${API_BASE}/api/predictions/${slug}`);
     if (!res.ok) throw new Error('Pronostic introuvable');
     return res.json();
   },
@@ -50,32 +62,32 @@ export const api = {
   async getArticles(category?: string, all = false): Promise<Article[]> {
     let url = `${API_BASE}/api/articles?all=${all}`;
     if (category) url += `&category=${encodeURIComponent(category)}`;
-    const res = await fetch(url);
+    const res = await apiFetch(url);
     if (!res.ok) throw new Error('Erreur lors du chargement des articles');
     return res.json();
   },
 
   async getArticleBySlug(slug: string): Promise<Article> {
-    const res = await fetch(`${API_BASE}/api/articles/${slug}`);
+    const res = await apiFetch(`${API_BASE}/api/articles/${slug}`);
     if (!res.ok) throw new Error('Article introuvable');
     return res.json();
   },
 
   async getCategories(): Promise<string[]> {
-    const res = await fetch(`${API_BASE}/api/categories`);
+    const res = await apiFetch(`${API_BASE}/api/categories`);
     if (!res.ok) throw new Error('Erreur lors du chargement des catégories');
     return res.json();
   },
 
   async getPage(slug: string): Promise<InformationalPage> {
-    const res = await fetch(`${API_BASE}/api/pages/${slug}`);
+    const res = await apiFetch(`${API_BASE}/api/pages/${slug}`);
     if (!res.ok) throw new Error('Page introuvable');
     return res.json();
   },
 
   // --- Auth APIs ---
   async login(email: string, password: string): Promise<{ token: string; user: AdminUser }> {
-    const res = await fetch(`${API_BASE}/api/auth/login`, {
+    const res = await apiFetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -88,8 +100,8 @@ export const api = {
 
   async logout(): Promise<void> {
     try {
-      await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
-    } catch (e) {
+      await apiFetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+    } catch {
       // ignore
     }
     localStorage.removeItem('coupfranc_token');
@@ -99,9 +111,7 @@ export const api = {
     const token = localStorage.getItem('coupfranc_token');
     if (!token) return null;
     try {
-      const res = await fetch(`${API_BASE}/api/auth/me`, {
-        headers: getAuthHeader(),
-      });
+      const res = await apiFetch(`${API_BASE}/api/auth/me`);
       if (!res.ok) {
         localStorage.removeItem('coupfranc_token');
         return null;
@@ -114,11 +124,10 @@ export const api = {
   },
 
   async changePassword(currentPassword: string, newPassword: string): Promise<{ message: string }> {
-    const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+    const res = await apiFetch(`${API_BASE}/api/auth/change-password`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeader(),
       },
       body: JSON.stringify({ currentPassword, newPassword }),
     });
@@ -129,9 +138,7 @@ export const api = {
 
   // --- Admin CRUD APIs ---
   async getAdminStats(): Promise<DashboardStats> {
-    const res = await fetch(`${API_BASE}/api/admin/stats`, {
-      headers: getAuthHeader(),
-    });
+    const res = await apiFetch(`${API_BASE}/api/admin/stats`);
     if (!res.ok) throw new Error('Erreur chargement statistiques');
     return res.json();
   },
@@ -141,11 +148,10 @@ export const api = {
     const url = isEdit ? `${API_BASE}/api/bookmakers/${item.id}` : `${API_BASE}/api/bookmakers`;
     const method = isEdit ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeader(),
       },
       body: JSON.stringify(item),
     });
@@ -155,9 +161,8 @@ export const api = {
   },
 
   async deleteBookmaker(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/api/bookmakers/${id}`, {
+    const res = await apiFetch(`${API_BASE}/api/bookmakers/${id}`, {
       method: 'DELETE',
-      headers: getAuthHeader(),
     });
     if (!res.ok) throw new Error('Erreur suppression bookmaker');
   },
@@ -167,11 +172,10 @@ export const api = {
     const url = isEdit ? `${API_BASE}/api/offers/${item.id}` : `${API_BASE}/api/offers`;
     const method = isEdit ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeader(),
       },
       body: JSON.stringify(item),
     });
@@ -181,9 +185,8 @@ export const api = {
   },
 
   async deleteOffer(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/api/offers/${id}`, {
+    const res = await apiFetch(`${API_BASE}/api/offers/${id}`, {
       method: 'DELETE',
-      headers: getAuthHeader(),
     });
     if (!res.ok) throw new Error('Erreur suppression bonus');
   },
@@ -193,11 +196,10 @@ export const api = {
     const url = isEdit ? `${API_BASE}/api/predictions/${item.id}` : `${API_BASE}/api/predictions`;
     const method = isEdit ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeader(),
       },
       body: JSON.stringify(item),
     });
@@ -207,9 +209,8 @@ export const api = {
   },
 
   async deletePrediction(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/api/predictions/${id}`, {
+    const res = await apiFetch(`${API_BASE}/api/predictions/${id}`, {
       method: 'DELETE',
-      headers: getAuthHeader(),
     });
     if (!res.ok) throw new Error('Erreur suppression pronostic');
   },
@@ -219,11 +220,10 @@ export const api = {
     const url = isEdit ? `${API_BASE}/api/articles/${item.id}` : `${API_BASE}/api/articles`;
     const method = isEdit ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeader(),
       },
       body: JSON.stringify(item),
     });
@@ -233,27 +233,23 @@ export const api = {
   },
 
   async deleteArticle(id: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/api/articles/${id}`, {
+    const res = await apiFetch(`${API_BASE}/api/articles/${id}`, {
       method: 'DELETE',
-      headers: getAuthHeader(),
     });
     if (!res.ok) throw new Error('Erreur suppression article');
   },
 
   async getAllPages(): Promise<InformationalPage[]> {
-    const res = await fetch(`${API_BASE}/api/pages`, {
-      headers: getAuthHeader(),
-    });
+    const res = await apiFetch(`${API_BASE}/api/pages`);
     if (!res.ok) throw new Error('Erreur chargement pages');
     return res.json();
   },
 
   async savePage(page: InformationalPage): Promise<InformationalPage> {
-    const res = await fetch(`${API_BASE}/api/pages/${page.slug}`, {
+    const res = await apiFetch(`${API_BASE}/api/pages/${page.slug}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        ...getAuthHeader(),
       },
       body: JSON.stringify(page),
     });
@@ -265,9 +261,8 @@ export const api = {
   async uploadImage(file: File): Promise<{ url: string; filename: string }> {
     const formData = new FormData();
     formData.append('image', file);
-    const res = await fetch(`${API_BASE}/api/upload`, {
+    const res = await apiFetch(`${API_BASE}/api/upload`, {
       method: 'POST',
-      headers: getAuthHeader(),
       body: formData,
     });
     const data = await res.json();

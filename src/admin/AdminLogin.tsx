@@ -8,8 +8,8 @@ interface AdminLoginProps {
 }
 
 export function AdminLogin({ onSuccess }: AdminLoginProps) {
-  const [email, setEmail] = useState('admin');
-  const [password, setPassword] = useState('123123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,10 +20,10 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
     setLoading(true);
 
     try {
-      const data = await api.login(email, password);
+      const data = await api.login(email.trim(), password);
       onSuccess(data.user);
     } catch (err: any) {
-      setError(err.message || 'Неверный логин или пароль');
+      setError(err.message || 'Identifiants invalides.');
     } finally {
       setLoading(false);
     }
@@ -54,46 +54,49 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              Логин
+            <label htmlFor="admin-username" className="block text-xs font-medium text-slate-300 mb-1.5">
+              Логин или E-mail
             </label>
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
               <input
+                id="admin-username"
+                name="username"
                 type="text"
                 required
-                autoComplete="off"
-                data-lpignore="true"
+                autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin"
+                placeholder="Entrez votre identifiant"
                 className="w-full pl-9 pr-3 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-lime-400 transition-colors"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+            <label htmlFor="admin-password" className="block text-xs font-medium text-slate-300 mb-1.5">
               Пароль
             </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
               <input
+                id="admin-password"
+                name="password"
                 type={showPassword ? 'text' : 'password'}
                 required
-                autoComplete="new-password"
-                data-lpignore="true"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••"
+                placeholder="••••••••"
                 className="w-full pl-9 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-lime-400 transition-colors"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+                aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>

@@ -7,12 +7,35 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // Security: Remove Express fingerprint
+  app.disable('x-powered-by');
+
+  // Trust first reverse proxy hop (Nginx / Docker ingress)
+  // Allows accurate client IP resolution without exposing to arbitrary client header forgery
+  app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 1);
+
+  // Security Headers Middleware
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+  });
+
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(cookieParser());
 
-  // Serve uploaded media files
-  app.use('/uploads', express.static(path.resolve(process.cwd(), 'data', 'uploads')));
+  // Serve uploaded media files with strict content-type
+  app.use(
+    '/uploads',
+    express.static(path.resolve(process.cwd(), 'data', 'uploads'), {
+      setHeaders: (res) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+      },
+    })
+  );
 
   // Mount API routes
   app.use(apiRouter);

@@ -12,9 +12,23 @@ import {
   verifyPassword,
   hashPassword,
   AuthenticatedRequest,
+  getClientIp,
+  isUserAuthenticated,
 } from './auth.ts';
 
 const router = express.Router();
+
+function sanitizeRichHtml(html: string): string {
+  if (!html) return '';
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+    .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, '')
+    .replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
+    .replace(/javascript\s*:/gi, '');
+}
 
 // Setup Multer for secure image uploads
 const UPLOADS_DIR = path.resolve(process.cwd(), 'data', 'uploads');
@@ -51,11 +65,24 @@ const upload = multer({
 });
 
 // ==========================================
+// 0. HEALTH CHECK (DOCKER / VPS MONITORING)
+// ==========================================
+
+router.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+    database: 'healthy',
+  });
+});
+
+// ==========================================
 // 1. AUTHENTICATION ROUTES
 // ==========================================
 
 router.post('/api/auth/login', (req: Request, res: Response) => {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const ip = getClientIp(req);
   const rateLimit = checkLoginRateLimit(ip);
 
   if (!rateLimit.allowed) {
@@ -123,8 +150,8 @@ router.post('/api/auth/change-password', authenticateToken, (req: AuthenticatedR
     return;
   }
   const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword || newPassword.length < 8) {
-    res.status(400).json({ error: 'Le nouveau mot de passe doit comporter au moins 8 caractères.' });
+  if (!currentPassword || !newPassword || newPassword.length < 6) {
+    res.status(400).json({ error: 'Le nouveau mot de passe doit comporter au moins 6 caractères.' });
     return;
   }
 
@@ -152,14 +179,16 @@ router.get('/api/admin/stats', authenticateToken, (_req: Request, res: Response)
 // ==========================================
 
 router.get('/api/bookmakers', (req: Request, res: Response) => {
-  const publishedOnly = req.query.all !== 'true';
+  const wantsAll = req.query.all === 'true';
+  const isAdmin = isUserAuthenticated(req);
+  const publishedOnly = !(wantsAll && isAdmin);
   const list = db.getBookmakers(publishedOnly);
   res.json(list);
 });
 
 router.get('/api/bookmakers/:slug', (req: Request, res: Response) => {
   const item = db.getBookmakerBySlug(req.params.slug);
-  if (!item) {
+  if (!item || (item.status === 'draft' && !isUserAuthenticated(req))) {
     res.status(404).json({ error: 'Bookmaker introuvable' });
     return;
   }
@@ -170,6 +199,11 @@ router.post('/api/bookmakers', authenticateToken, (req: Request, res: Response) 
   const data = req.body;
   if (!data.name || !data.slug) {
     res.status(400).json({ error: 'Nom et slug requis.' });
+    return;
+  }
+  const existing = db.getBookmakerBySlug(data.slug);
+  if (existing) {
+    res.status(400).json({ error: 'Un bookmaker avec ce slug existe déjà.' });
     return;
   }
   const newItem = {
@@ -184,6 +218,13 @@ router.post('/api/bookmakers', authenticateToken, (req: Request, res: Response) 
 router.put('/api/bookmakers/:id', authenticateToken, (req: Request, res: Response) => {
   const data = req.body;
   data.id = req.params.id;
+  if (data.slug) {
+    const existing = db.getBookmakerBySlug(data.slug);
+    if (existing && existing.id !== req.params.id) {
+      res.status(400).json({ error: 'Un bookmaker avec ce slug existe déjà.' });
+      return;
+    }
+  }
   const saved = db.saveBookmaker(data);
   res.json(saved);
 });
@@ -202,7 +243,9 @@ router.delete('/api/bookmakers/:id', authenticateToken, (req: Request, res: Resp
 // ==========================================
 
 router.get('/api/offers', (req: Request, res: Response) => {
-  const publishedOnly = req.query.all !== 'true';
+  const wantsAll = req.query.all === 'true';
+  const isAdmin = isUserAuthenticated(req);
+  const publishedOnly = !(wantsAll && isAdmin);
   const list = db.getOffers(publishedOnly);
   res.json(list);
 });
@@ -212,6 +255,13 @@ router.post('/api/offers', authenticateToken, (req: Request, res: Response) => {
   if (!data.title || !data.bookmakerName) {
     res.status(400).json({ error: 'Titre et bookmaker requis.' });
     return;
+  }
+  if (data.slug) {
+    const existing = db.getOffers(false).find((o) => o.slug === data.slug);
+    if (existing) {
+      res.status(400).json({ error: 'Une offre avec ce slug existe déjà.' });
+      return;
+    }
   }
   const newItem = {
     ...data,
@@ -224,6 +274,13 @@ router.post('/api/offers', authenticateToken, (req: Request, res: Response) => {
 router.put('/api/offers/:id', authenticateToken, (req: Request, res: Response) => {
   const data = req.body;
   data.id = req.params.id;
+  if (data.slug) {
+    const existing = db.getOffers(false).find((o) => o.slug === data.slug && o.id !== req.params.id);
+    if (existing) {
+      res.status(400).json({ error: 'Une offre avec ce slug existe déjà.' });
+      return;
+    }
+  }
   const saved = db.saveOffer(data);
   res.json(saved);
 });
@@ -242,14 +299,16 @@ router.delete('/api/offers/:id', authenticateToken, (req: Request, res: Response
 // ==========================================
 
 router.get('/api/predictions', (req: Request, res: Response) => {
-  const publishedOnly = req.query.all !== 'true';
+  const wantsAll = req.query.all === 'true';
+  const isAdmin = isUserAuthenticated(req);
+  const publishedOnly = !(wantsAll && isAdmin);
   const list = db.getPredictions(publishedOnly);
   res.json(list);
 });
 
 router.get('/api/predictions/:slug', (req: Request, res: Response) => {
   const item = db.getPredictionBySlug(req.params.slug);
-  if (!item) {
+  if (!item || (item.status === 'draft' && !isUserAuthenticated(req))) {
     res.status(404).json({ error: 'Pronostic introuvable.' });
     return;
   }
@@ -258,8 +317,13 @@ router.get('/api/predictions/:slug', (req: Request, res: Response) => {
 
 router.post('/api/predictions', authenticateToken, (req: Request, res: Response) => {
   const data = req.body;
-  if (!data.title || !data.homeTeam || !data.awayTeam) {
-    res.status(400).json({ error: 'Titre et équipes requis.' });
+  if (!data.title || !data.homeTeam || !data.awayTeam || !data.slug) {
+    res.status(400).json({ error: 'Titre, équipes et slug requis.' });
+    return;
+  }
+  const existing = db.getPredictionBySlug(data.slug);
+  if (existing) {
+    res.status(400).json({ error: 'Un pronostic avec ce slug existe déjà.' });
     return;
   }
   const newItem = {
@@ -273,6 +337,13 @@ router.post('/api/predictions', authenticateToken, (req: Request, res: Response)
 router.put('/api/predictions/:id', authenticateToken, (req: Request, res: Response) => {
   const data = req.body;
   data.id = req.params.id;
+  if (data.slug) {
+    const existing = db.getPredictionBySlug(data.slug);
+    if (existing && existing.id !== req.params.id) {
+      res.status(400).json({ error: 'Un pronostic avec ce slug existe déjà.' });
+      return;
+    }
+  }
   const saved = db.savePrediction(data);
   res.json(saved);
 });
@@ -291,7 +362,9 @@ router.delete('/api/predictions/:id', authenticateToken, (req: Request, res: Res
 // ==========================================
 
 router.get('/api/articles', (req: Request, res: Response) => {
-  const publishedOnly = req.query.all !== 'true';
+  const wantsAll = req.query.all === 'true';
+  const isAdmin = isUserAuthenticated(req);
+  const publishedOnly = !(wantsAll && isAdmin);
   let list = db.getArticles(publishedOnly);
   if (req.query.category) {
     list = list.filter((a) => a.category.toLowerCase() === (req.query.category as string).toLowerCase());
@@ -301,7 +374,7 @@ router.get('/api/articles', (req: Request, res: Response) => {
 
 router.get('/api/articles/:slug', (req: Request, res: Response) => {
   const item = db.getArticleBySlug(req.params.slug);
-  if (!item) {
+  if (!item || (item.status === 'draft' && !isUserAuthenticated(req))) {
     res.status(404).json({ error: 'Article introuvable.' });
     return;
   }
@@ -314,8 +387,14 @@ router.post('/api/articles', authenticateToken, (req: Request, res: Response) =>
     res.status(400).json({ error: 'Titre, slug et contenu requis.' });
     return;
   }
+  const existing = db.getArticleBySlug(data.slug);
+  if (existing) {
+    res.status(400).json({ error: 'Un article avec ce slug existe déjà.' });
+    return;
+  }
   const newItem = {
     ...data,
+    content: sanitizeRichHtml(data.content),
     id: data.id || `art_${Date.now()}`,
     publishedAt: data.status === 'published' ? (data.publishedAt || new Date().toISOString()) : '',
   };
@@ -326,6 +405,16 @@ router.post('/api/articles', authenticateToken, (req: Request, res: Response) =>
 router.put('/api/articles/:id', authenticateToken, (req: Request, res: Response) => {
   const data = req.body;
   data.id = req.params.id;
+  if (data.slug) {
+    const existing = db.getArticleBySlug(data.slug);
+    if (existing && existing.id !== req.params.id) {
+      res.status(400).json({ error: 'Un article avec ce slug existe déjà.' });
+      return;
+    }
+  }
+  if (data.content) {
+    data.content = sanitizeRichHtml(data.content);
+  }
   const saved = db.saveArticle(data);
   res.json(saved);
 });
@@ -377,6 +466,9 @@ router.get('/api/pages/:slug', (req: Request, res: Response) => {
 router.put('/api/pages/:slug', authenticateToken, (req: Request, res: Response) => {
   const data = req.body;
   data.slug = req.params.slug;
+  if (data.content) {
+    data.content = sanitizeRichHtml(data.content);
+  }
   const saved = db.savePage(data);
   res.json(saved);
 });
@@ -390,6 +482,37 @@ router.post('/api/upload', authenticateToken, upload.single('image'), (req: Requ
     res.status(400).json({ error: 'Aucun fichier transmis ou format non supporté.' });
     return;
   }
+
+  // Security check: If SVG, ensure it does not contain executable script or event handlers
+  if (req.file.mimetype === 'image/svg+xml') {
+    try {
+      const content = fs.readFileSync(req.file.path, 'utf-8');
+      const dangerousPatterns = [
+        /<script/i,
+        /onload\s*=/i,
+        /onerror\s*=/i,
+        /onclick\s*=/i,
+        /onmouseover\s*=/i,
+        /<iframe/i,
+        /javascript:/i,
+        /<object/i,
+        /<embed/i,
+      ];
+      const hasDangerousTag = dangerousPatterns.some((pattern) => pattern.test(content));
+      if (hasDangerousTag) {
+        fs.unlinkSync(req.file.path);
+        res.status(400).json({
+          error: 'Fichier SVG non autorisé : les scripts exécutables et événements interactifs sont interdits pour des raisons de sécurité.',
+        });
+        return;
+      }
+    } catch (err) {
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      res.status(500).json({ error: 'Erreur lors du contrôle de sécurité du fichier.' });
+      return;
+    }
+  }
+
   const fileUrl = `/uploads/${req.file.filename}`;
   res.json({
     message: 'Image téléversée avec succès.',

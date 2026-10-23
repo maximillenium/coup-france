@@ -22,8 +22,8 @@ export function AdminPasswordModal({ isOpen, onClose }: Props) {
     setError(null);
     setSuccess(false);
 
-    if (newPassword.length < 8) {
-      setError('Новый пароль должен содержать не менее 8 символов.');
+    if (newPassword.length < 6) {
+      setError('Новый пароль должен содержать не менее 6 символов.');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -98,7 +98,7 @@ export function AdminPasswordModal({ isOpen, onClose }: Props) {
 
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Новый пароль (минимум 8 символов)
+                Новый пароль (минимум 6 символов)
               </label>
               <input
                 type="password"
