@@ -531,12 +531,29 @@ export class DatabaseService {
         );
 
         if (adminIndex >= 0) {
-          // Normalize email to 'admin' while preserving the existing passwordHash
+          let passHash = users[adminIndex].passwordHash;
+          const initialAdminPass = process.env.ADMIN_INITIAL_PASSWORD;
+          if (initialAdminPass && initialAdminPass.trim().length >= 10) {
+            let isWeak = !passHash;
+            if (passHash) {
+              for (const weak of KNOWN_WEAK_PASSWORDS) {
+                if (bcrypt.compareSync(weak, passHash)) {
+                  isWeak = true;
+                  break;
+                }
+              }
+            }
+            if (isWeak) {
+              passHash = bcrypt.hashSync(initialAdminPass.trim(), 10);
+            }
+          }
+
+          // Normalize email to 'admin' while preserving existing or initialized passwordHash
           users[adminIndex] = {
             ...users[adminIndex],
             email: 'admin',
             name: users[adminIndex].name || 'Администратор',
-            passwordHash: users[adminIndex].passwordHash,
+            passwordHash: passHash,
             role: 'admin',
           };
         } else {

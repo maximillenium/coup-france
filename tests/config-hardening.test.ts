@@ -9,7 +9,7 @@ import {
   MIN_JWT_SECRET_LENGTH,
 } from '../src/server/auth.ts';
 import { detectImageFormat } from '../src/server/routes.ts';
-import { validateProductionCredentials } from '../src/server/db.ts';
+import { validateProductionCredentials, DatabaseService } from '../src/server/db.ts';
 
 async function runConfigHardeningTests() {
   console.log('====================================================');
@@ -190,6 +190,100 @@ async function runConfigHardeningTests() {
     const gitignoreContent = fs.readFileSync(path.resolve(process.cwd(), '.gitignore'), 'utf-8');
     assert.ok(gitignoreContent.includes('.env*') || gitignoreContent.includes('.env'));
     assert.ok(!fs.existsSync(path.resolve(process.cwd(), '.env')));
+  });
+
+  // 11. ADMIN_INITIAL_PASSWORD replaces weak template password on initial load
+  await test('ADMIN_INITIAL_PASSWORD replaces weak template password on initial load in isolated database', () => {
+    const tempDir = fs.mkdtempSync(path.join(path.resolve(process.cwd(), 'data'), 'test-init-pass-'));
+    const tempDbFile = path.join(tempDir, 'database.json');
+
+    // Create database file with weak admin password
+    const initialDb = {
+      users: [
+        {
+          id: 'usr_admin_1',
+          email: 'admin',
+          name: 'Admin',
+          passwordHash: bcrypt.hashSync('123123', 10),
+          role: 'admin',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      categories: [],
+      bookmakers: [],
+      offers: [],
+      predictions: [],
+      articles: [],
+      pages: {},
+    };
+    fs.writeFileSync(tempDbFile, JSON.stringify(initialDb, null, 2), 'utf-8');
+
+    process.env.ADMIN_INITIAL_PASSWORD = 'StrongInitialPassword2026!';
+    const testDbService = new DatabaseService(tempDbFile);
+    const adminUser = testDbService.findUserByEmail('admin');
+
+    assert.ok(adminUser, 'Admin user must exist');
+    assert.strictEqual(
+      bcrypt.compareSync('StrongInitialPassword2026!', adminUser.passwordHash),
+      true,
+      'Admin password hash must be updated to match ADMIN_INITIAL_PASSWORD'
+    );
+    assert.strictEqual(
+      bcrypt.compareSync('123123', adminUser.passwordHash),
+      false,
+      'Old weak password hash must no longer match'
+    );
+
+    // Clean up
+    delete process.env.ADMIN_INITIAL_PASSWORD;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // 12. Existing strong admin password is never overwritten by ADMIN_INITIAL_PASSWORD
+  await test('Existing custom strong admin password is never overwritten on restart or rebuild', () => {
+    const tempDir = fs.mkdtempSync(path.join(path.resolve(process.cwd(), 'data'), 'test-preserve-pass-'));
+    const tempDbFile = path.join(tempDir, 'database.json');
+
+    const customStrongHash = bcrypt.hashSync('ExistingCustomPass999!', 10);
+    const existingDb = {
+      users: [
+        {
+          id: 'usr_admin_1',
+          email: 'admin',
+          name: 'Admin',
+          passwordHash: customStrongHash,
+          role: 'admin',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      categories: [],
+      bookmakers: [],
+      offers: [],
+      predictions: [],
+      articles: [],
+      pages: {},
+    };
+    fs.writeFileSync(tempDbFile, JSON.stringify(existingDb, null, 2), 'utf-8');
+
+    process.env.ADMIN_INITIAL_PASSWORD = 'AttemptedOverwritePass123!';
+    const testDbService = new DatabaseService(tempDbFile);
+    const adminUser = testDbService.findUserByEmail('admin');
+
+    assert.ok(adminUser, 'Admin user must exist');
+    assert.strictEqual(
+      bcrypt.compareSync('ExistingCustomPass999!', adminUser.passwordHash),
+      true,
+      'Existing custom password must be strictly preserved'
+    );
+    assert.strictEqual(
+      bcrypt.compareSync('AttemptedOverwritePass123!', adminUser.passwordHash),
+      false,
+      'ADMIN_INITIAL_PASSWORD must NOT overwrite an existing strong password'
+    );
+
+    // Clean up
+    delete process.env.ADMIN_INITIAL_PASSWORD;
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   console.log('====================================================');

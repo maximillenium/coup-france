@@ -1,0 +1,18 @@
+{
+  "users": [
+    {
+      "id": "usr_admin_1",
+      "email": "admin",
+      "name": "Admin",
+      "passwordHash": "$2b$10$PgDOQW76QJMpNEE36MYYcuwddpRgazq/CKRj1noGljbjEdQFE2Gp.",
+      "role": "admin",
+      "createdAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "categories": [],
+  "bookmakers": [],
+  "offers": [],
+  "predictions": [],
+  "articles": [],
+  "pages": {}
+}
