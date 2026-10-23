@@ -66,18 +66,20 @@ cp .env.example .env
 nano .env
 ```
 
-Générez une clé JWT secrète :
+Générez une clé JWT secrète cryptographiquement sécurisée :
 ```bash
-# Générer une clé de 64 caractères hexadécimaux
+# Générer une clé aléatoire forte de 64 caractères hexadécimaux (256 bits)
 openssl rand -hex 32
 ```
 
-Renseignez dans votre `.env` :
+Renseignez impérativement dans votre `.env` :
 - `APP_URL=https://coupfranc.fr`
-- `JWT_SECRET=<votre_cle_generee>`
-- `TRUST_PROXY_HOPS=1`
+- `JWT_SECRET=<cle_generee_via_openssl>` *(Strictement obligatoire : le conteneur refusera de démarrer sans cette variable ou si la clé comporte moins de 32 caractères)*
+- `TRUST_PROXY_HOPS=1` *(Doit correspondre exactement à votre topologie réseau : 1 si Nginx est l'unique proxy inverse ; 2 si Cloudflare/CDN précède Nginx ; 0 si connexion directe sans proxy)*
 
-Lancez l'application :
+> **Sécurité :** Ne committez jamais le fichier `.env` sur Git (il est exclu par `.gitignore`). Aucun fallback par défaut n'est toléré en production.
+
+Lancez l'application avec Docker Compose :
 
 ```bash
 docker compose up -d --build

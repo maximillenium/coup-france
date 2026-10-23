@@ -2,17 +2,22 @@ import express from 'express';
 import path from 'node:path';
 import cookieParser from 'cookie-parser';
 import apiRouter from './src/server/routes.ts';
+import { validateEnvironment, parseTrustProxyHops } from './src/server/auth.ts';
 
 async function startServer() {
+  // Fail fast if required environment variables (such as JWT_SECRET) are missing or insecure
+  validateEnvironment();
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
   // Security: Remove Express fingerprint
   app.disable('x-powered-by');
 
-  // Trust first reverse proxy hop (Nginx / Docker ingress)
+  // Trust configured reverse proxy hops (Nginx / Docker ingress)
   // Allows accurate client IP resolution without exposing to arbitrary client header forgery
-  app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 1);
+  const proxyHops = parseTrustProxyHops(process.env.TRUST_PROXY_HOPS);
+  app.set('trust proxy', proxyHops);
 
   // Security Headers Middleware
   app.use((_req, res, next) => {

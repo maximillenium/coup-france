@@ -16,10 +16,12 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - APP_URL=${APP_URL:-https://coupfranc.fr}
-      - JWT_SECRET=${JWT_SECRET:-generate-a-strong-32-char-random-jwt-secret-string}
-      - TRUST_PROXY_HOPS=1
+      # Required in production: fail fast if unset or empty; no default fallback secret
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET environment variable is required. Generate one with: openssl rand -hex 32}
+      # Reverse proxy hops: 1 for Nginx on host; adjust to 2 if behind Cloudflare/CDN
+      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-1}
     volumes:
-      # Persistent volume for atomic database and uploads
+      # Persistent volume for atomic database (database.json) and uploads (data/uploads)
       - coupfranc_data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1"]
@@ -31,4 +33,3 @@ services:
 volumes:
   coupfranc_data:
     name: coupfranc_data
-

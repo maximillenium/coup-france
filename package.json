@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/security-audit.test.ts && tsx tests/admin-workflow-e2e.test.ts"
+    "test": "tsx tests/config-hardening.test.ts && tsx tests/security-audit.test.ts && tsx tests/admin-workflow-e2e.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

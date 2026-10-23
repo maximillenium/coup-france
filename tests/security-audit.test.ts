@@ -23,6 +23,7 @@ async function runSecurityAuditTests() {
 
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1);
 
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
