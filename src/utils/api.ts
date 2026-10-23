@@ -86,7 +86,7 @@ export const api = {
   },
 
   // --- Auth APIs ---
-  async login(email: string, password: string): Promise<{ token: string; user: AdminUser }> {
+  async login(email: string, password: string): Promise<{ user: AdminUser }> {
     const res = await apiFetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -94,7 +94,6 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Identifiants invalides');
-    localStorage.setItem('coupfranc_token', data.token);
     return data;
   },
 
@@ -104,18 +103,12 @@ export const api = {
     } catch {
       // ignore
     }
-    localStorage.removeItem('coupfranc_token');
   },
 
   async getCurrentUser(): Promise<AdminUser | null> {
-    const token = localStorage.getItem('coupfranc_token');
-    if (!token) return null;
     try {
       const res = await apiFetch(`${API_BASE}/api/auth/me`);
-      if (!res.ok) {
-        localStorage.removeItem('coupfranc_token');
-        return null;
-      }
+      if (!res.ok) return null;
       const data = await res.json();
       return data.user;
     } catch {

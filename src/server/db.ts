@@ -22,18 +22,65 @@ export interface AppDatabase {
   users: AdminUserData[];
 }
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'database.json');
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+export function getDataDir(): string {
+  return process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
 }
 
-const defaultAdminPasswordHash = bcrypt.hashSync('123123', 10);
+export function getDbFilePath(): string {
+  return process.env.DB_FILE ? path.resolve(process.env.DB_FILE) : path.join(getDataDir(), 'database.json');
+}
+
+export function getUploadsDir(): string {
+  return process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.join(getDataDir(), 'uploads');
+}
+
+export const KNOWN_WEAK_PASSWORDS = [
+  '123123',
+  'admin',
+  'password',
+  'admin123',
+  '123456',
+  '12345678',
+  'coupfranc',
+  'coupfranc2026',
+];
+
+export function validateProductionCredentials(users: AdminUserData[]): void {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const adminUsers = users.filter((u) => u.role === 'admin');
+  if (adminUsers.length === 0) {
+    throw new Error(
+      '[FATAL CONFIG ERROR] No administrator account found. An admin account is required in production.'
+    );
+  }
+
+  for (const admin of adminUsers) {
+    for (const weak of KNOWN_WEAK_PASSWORDS) {
+      if (bcrypt.compareSync(weak, admin.passwordHash)) {
+        throw new Error(
+          '[FATAL CONFIG ERROR] Production startup blocked: Administrator account is configured with a known, weak, or test password. ' +
+          'You must change the administrator password before starting in production mode. ' +
+          'Set a secure password via ADMIN_INITIAL_PASSWORD or update database.json.'
+        );
+      }
+    }
+  }
+}
+
+function getInitialAdminHash(): string {
+  const initialPassword = process.env.ADMIN_INITIAL_PASSWORD;
+  if (initialPassword && initialPassword.trim().length >= 10) {
+    return bcrypt.hashSync(initialPassword.trim(), 10);
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '[FATAL CONFIG ERROR] In production, ADMIN_INITIAL_PASSWORD must be provided (min 10 characters) when creating an initial database.'
+    );
+  }
+  // Development / test local fallback only
+  return bcrypt.hashSync('123123', 10);
+}
 
 const INITIAL_DATABASE: AppDatabase = {
   users: [
@@ -41,7 +88,7 @@ const INITIAL_DATABASE: AppDatabase = {
       id: 'usr_admin_1',
       email: 'admin',
       name: 'Администратор',
-      passwordHash: defaultAdminPasswordHash,
+      passwordHash: '',
       role: 'admin',
       createdAt: '2026-01-01T00:00:00Z',
     },
@@ -445,17 +492,37 @@ Analyse éditoriale indépendante. Aucun gain garanti.`,
   },
 };
 
-class DatabaseService {
+export class DatabaseService {
   private data: AppDatabase;
+  private dbFile: string;
 
-  constructor() {
+  constructor(customDbPath?: string) {
+    this.dbFile = customDbPath || getDbFilePath();
+    const dataDir = path.dirname(this.dbFile);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const uploadsDir = getUploadsDir();
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    this.data = this.loadDatabase();
+    validateProductionCredentials(this.data.users);
+  }
+
+  public reloadFromDisk(customPath?: string): void {
+    if (customPath) {
+      this.dbFile = customPath;
+    } else {
+      this.dbFile = getDbFilePath();
+    }
     this.data = this.loadDatabase();
   }
 
   private loadDatabase(): AppDatabase {
     try {
-      if (fs.existsSync(DB_FILE)) {
-        const fileContent = fs.readFileSync(DB_FILE, 'utf-8');
+      if (fs.existsSync(this.dbFile)) {
+        const fileContent = fs.readFileSync(this.dbFile, 'utf-8');
         const parsed = JSON.parse(fileContent);
         let users: AdminUserData[] = parsed.users || [];
 
@@ -464,12 +531,12 @@ class DatabaseService {
         );
 
         if (adminIndex >= 0) {
-          // Normalize email to 'admin' while preserving the existing passwordHash!
+          // Normalize email to 'admin' while preserving the existing passwordHash
           users[adminIndex] = {
             ...users[adminIndex],
             email: 'admin',
             name: users[adminIndex].name || 'Администратор',
-            passwordHash: users[adminIndex].passwordHash || defaultAdminPasswordHash,
+            passwordHash: users[adminIndex].passwordHash,
             role: 'admin',
           };
         } else {
@@ -478,7 +545,7 @@ class DatabaseService {
             id: 'usr_admin_1',
             email: 'admin',
             name: 'Администратор',
-            passwordHash: defaultAdminPasswordHash,
+            passwordHash: getInitialAdminHash(),
             role: 'admin',
             createdAt: '2026-01-01T00:00:00Z',
           });
@@ -493,18 +560,31 @@ class DatabaseService {
         this.saveDatabase(loaded);
         return loaded;
       }
-    } catch (err) {
-      console.error('Failed to load database.json:', err);
+    } catch (err: any) {
+      if (err.message && err.message.startsWith('[FATAL CONFIG ERROR]')) {
+        throw err;
+      }
+      console.error('Failed to load database file:', err);
     }
-    this.saveDatabase(INITIAL_DATABASE);
-    return INITIAL_DATABASE;
+
+    const initialDb: AppDatabase = {
+      ...INITIAL_DATABASE,
+      users: [
+        {
+          ...INITIAL_DATABASE.users[0],
+          passwordHash: getInitialAdminHash(),
+        },
+      ],
+    };
+    this.saveDatabase(initialDb);
+    return initialDb;
   }
 
   private saveDatabase(dataToSave: AppDatabase): void {
     try {
-      const tempFile = `${DB_FILE}.tmp`;
+      const tempFile = `${this.dbFile}.tmp`;
       fs.writeFileSync(tempFile, JSON.stringify(dataToSave, null, 2), 'utf-8');
-      fs.renameSync(tempFile, DB_FILE);
+      fs.renameSync(tempFile, this.dbFile);
     } catch (err) {
       console.error('Failed to write database file:', err);
     }
@@ -736,3 +816,8 @@ class DatabaseService {
 }
 
 export const db = new DatabaseService();
+
+export function createDatabaseService(customDbPath?: string): DatabaseService {
+  return new DatabaseService(customDbPath);
+}
+

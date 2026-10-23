@@ -65,64 +65,169 @@ export function getJwtSecret(): string {
   return process.env.JWT_SECRET!;
 }
 
+export const MIN_TRUST_PROXY_HOPS = 0;
+export const MAX_TRUST_PROXY_HOPS = 10;
+
+/**
+ * Validates the TRUST_PROXY_HOPS environment variable.
+ * Strictly requires the entire string to be a non-negative integer between 0 and 10.
+ * Rejects malformed values immediately to prevent reverse proxy header spoofing.
+ */
 export function parseTrustProxyHops(val?: string): number {
-  if (val === undefined || val === null || val.trim() === '') {
-    return 1; // Default to 1 (standard single Nginx reverse proxy)
-  }
-  const parsed = Number.parseInt(val.trim(), 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    console.warn(`[WARN] Invalid TRUST_PROXY_HOPS="${val}". Falling back to 1.`);
+  if (val === undefined || val === null || val === '') {
+    // Default to 1 (standard single Nginx reverse proxy on the VPS host)
     return 1;
   }
-  return parsed;
+
+  const trimmed = val.trim();
+  // Strictly validate the ENTIRE string is digits only (rejects "1abc", "-1", "true", "1.5", etc.)
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(
+      `[FATAL CONFIG ERROR] Invalid TRUST_PROXY_HOPS="${val}". ` +
+      `Value must be a non-negative integer between ${MIN_TRUST_PROXY_HOPS} and ${MAX_TRUST_PROXY_HOPS}. ` +
+      'Do not use arbitrary strings or decimals.'
+    );
+  }
+
+  const hops = Number.parseInt(trimmed, 10);
+  if (hops < MIN_TRUST_PROXY_HOPS || hops > MAX_TRUST_PROXY_HOPS) {
+    throw new Error(
+      `[FATAL CONFIG ERROR] TRUST_PROXY_HOPS=${hops} is outside the supported range [${MIN_TRUST_PROXY_HOPS}, ${MAX_TRUST_PROXY_HOPS}]. ` +
+      'Specify the exact number of trusted reverse-proxy hops matching your deployment topology.'
+    );
+  }
+
+  return hops;
 }
 
 const TOKEN_EXPIRY = '7d';
 
-// Rate limiter for login attempts (in-memory sliding window)
-interface AttemptRecord {
+interface RateLimitRecord {
   count: number;
   lastAttempt: number;
+  lockoutUntil?: number;
 }
-const loginAttempts = new Map<string, AttemptRecord>();
+
+const MAX_RATE_LIMIT_ENTRIES = 5000;
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_PERIOD_MS = 15 * 60 * 1000; // 15 minutes
+const ATTEMPT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes sliding window
 
-export function checkLoginRateLimit(ip: string): { allowed: boolean; remainingSeconds?: number } {
-  const record = loginAttempts.get(ip);
-  const now = Date.now();
+/**
+ * Robust Bounded In-Memory Login Rate Limiter for Single-Instance VPS deployments.
+ *
+ * Characteristics & Design:
+ * - Bounded memory (max 5,000 entries) prevents memory exhaustion (DoS) from IP-spoofing floods.
+ * - Automatic periodic pruning cleans up expired records every 5 minutes.
+ * - Sliding lockout window locks out after 5 failed attempts for 15 minutes.
+ * - Limitation note: For horizontal multi-instance deployments behind a cluster load balancer,
+ *   a distributed store such as Redis would be required. For a single VPS host, this is ideal
+ *   due to zero network latency and low resource overhead.
+ */
+export class LoginRateLimiter {
+  private attempts = new Map<string, RateLimitRecord>();
+  private cleanupTimer: NodeJS.Timeout | null = null;
 
-  if (!record) {
-    return { allowed: true };
+  constructor() {
+    this.cleanupTimer = setInterval(() => {
+      this.prune();
+    }, 5 * 60 * 1000);
+    if (this.cleanupTimer && this.cleanupTimer.unref) {
+      this.cleanupTimer.unref(); // Ensure timer does not prevent process exit in tests
+    }
   }
 
-  if (record.count >= MAX_ATTEMPTS) {
-    const elapsed = now - record.lastAttempt;
-    if (elapsed < LOCKOUT_PERIOD_MS) {
-      const remainingSeconds = Math.ceil((LOCKOUT_PERIOD_MS - elapsed) / 1000);
+  check(ip: string): { allowed: boolean; remainingSeconds?: number } {
+    const record = this.attempts.get(ip);
+    const now = Date.now();
+
+    if (!record) {
+      return { allowed: true };
+    }
+
+    if (record.lockoutUntil && record.lockoutUntil > now) {
+      const remainingSeconds = Math.ceil((record.lockoutUntil - now) / 1000);
       return { allowed: false, remainingSeconds };
     }
-    // Lockout expired, reset
-    loginAttempts.delete(ip);
+
+    // If window expired and not locked out, reset
+    if (now - record.lastAttempt > ATTEMPT_WINDOW_MS) {
+      this.attempts.delete(ip);
+      return { allowed: true };
+    }
+
+    if (record.count >= MAX_ATTEMPTS) {
+      record.lockoutUntil = now + LOCKOUT_PERIOD_MS;
+      const remainingSeconds = Math.ceil(LOCKOUT_PERIOD_MS / 1000);
+      return { allowed: false, remainingSeconds };
+    }
+
     return { allowed: true };
   }
 
-  return { allowed: true };
+  recordFailed(ip: string): void {
+    const now = Date.now();
+    const record = this.attempts.get(ip);
+
+    if (record) {
+      if (now - record.lastAttempt > ATTEMPT_WINDOW_MS) {
+        record.count = 1;
+      } else {
+        record.count += 1;
+      }
+      record.lastAttempt = now;
+      if (record.count >= MAX_ATTEMPTS) {
+        record.lockoutUntil = now + LOCKOUT_PERIOD_MS;
+      }
+    } else {
+      if (this.attempts.size >= MAX_RATE_LIMIT_ENTRIES) {
+        this.pruneOldest(1000);
+      }
+      this.attempts.set(ip, { count: 1, lastAttempt: now });
+    }
+  }
+
+  reset(ip: string): void {
+    this.attempts.delete(ip);
+  }
+
+  prune(): void {
+    const now = Date.now();
+    for (const [ip, record] of this.attempts.entries()) {
+      const isLocked = record.lockoutUntil && record.lockoutUntil > now;
+      const isStale = now - record.lastAttempt > ATTEMPT_WINDOW_MS;
+      if (!isLocked && isStale) {
+        this.attempts.delete(ip);
+      }
+    }
+  }
+
+  private pruneOldest(count: number): void {
+    let removed = 0;
+    for (const key of this.attempts.keys()) {
+      this.attempts.delete(key);
+      removed++;
+      if (removed >= count) break;
+    }
+  }
+
+  clear(): void {
+    this.attempts.clear();
+  }
+}
+
+export const rateLimiter = new LoginRateLimiter();
+
+export function checkLoginRateLimit(ip: string): { allowed: boolean; remainingSeconds?: number } {
+  return rateLimiter.check(ip);
 }
 
 export function recordFailedLogin(ip: string): void {
-  const now = Date.now();
-  const record = loginAttempts.get(ip);
-  if (record) {
-    record.count += 1;
-    record.lastAttempt = now;
-  } else {
-    loginAttempts.set(ip, { count: 1, lastAttempt: now });
-  }
+  rateLimiter.recordFailed(ip);
 }
 
 export function resetLoginAttempts(ip: string): void {
-  loginAttempts.delete(ip);
+  rateLimiter.reset(ip);
 }
 
 export function generateToken(payload: { id: string; email: string; role: string }): string {

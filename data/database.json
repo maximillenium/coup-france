@@ -4,7 +4,7 @@
       "id": "usr_admin_1",
       "email": "admin",
       "name": "Администратор",
-      "passwordHash": "$2b$10$34qVWRpD7rgRbXOzvg5dmugwBl59W24wz2D6EQ/1Qu.kaHPsdLVw2",
+      "passwordHash": "$2b$10$oFlAWm4HCcJIjeHjBQ5f9O6.kXKUm7YY8FRrUxsKU6sN7xTOXi5Hy",
       "role": "admin",
       "createdAt": "2026-01-01T00:00:00Z"
     }

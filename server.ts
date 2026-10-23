@@ -3,6 +3,7 @@ import path from 'node:path';
 import cookieParser from 'cookie-parser';
 import apiRouter from './src/server/routes.ts';
 import { validateEnvironment, parseTrustProxyHops } from './src/server/auth.ts';
+import { getUploadsDir } from './src/server/db.ts';
 
 async function startServer() {
   // Fail fast if required environment variables (such as JWT_SECRET) are missing or insecure
@@ -32,12 +33,15 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(cookieParser());
 
-  // Serve uploaded media files with strict content-type
+  // Serve uploaded media files with strict sandboxing and content security
   app.use(
     '/uploads',
-    express.static(path.resolve(process.cwd(), 'data', 'uploads'), {
+    express.static(getUploadsDir(), {
       setHeaders: (res) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
       },
     })
   );

@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
 import multer from 'multer';
-import { db } from './db.ts';
+import { db, getUploadsDir } from './db.ts';
 import {
   authenticateToken,
   checkLoginRateLimit,
@@ -18,6 +18,47 @@ import {
 
 const router = express.Router();
 
+export type AllowedImageType = 'png' | 'jpeg' | 'webp';
+
+export function detectImageFormat(buffer: Buffer): AllowedImageType | null {
+  if (buffer.length < 12) return null;
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return 'png';
+  }
+
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'jpeg';
+  }
+
+  // WebP: RIFF (bytes 0-3) + WEBP (bytes 8-11)
+  if (
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return 'webp';
+  }
+
+  return null;
+}
+
 function sanitizeRichHtml(html: string): string {
   if (!html) return '';
   return html
@@ -30,15 +71,14 @@ function sanitizeRichHtml(html: string): string {
     .replace(/javascript\s*:/gi, '');
 }
 
-// Setup Multer for secure image uploads
-const UPLOADS_DIR = path.resolve(process.cwd(), 'data', 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-
+// Setup Multer for secure image uploads (strictly JPEG, PNG, WEBP)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, UPLOADS_DIR);
+    const dir = getUploadsDir();
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
   },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -55,11 +95,13 @@ const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max
   fileFilter: (_req, file, cb) => {
-    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
-    if (allowedMimes.includes(file.mimetype)) {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (file.mimetype === 'image/svg+xml') {
+      cb(new Error('Format SVG non autorisé. Seuls les formats JPEG, PNG et WEBP sont acceptés.'));
+    } else if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Format non autorisé. Seuls JPEG, PNG, WEBP et SVG sont acceptés.'));
+      cb(new Error('Format non autorisé. Seuls les formats JPEG, PNG et WEBP sont acceptés.'));
     }
   },
 });
@@ -114,18 +156,23 @@ router.post('/api/auth/login', (req: Request, res: Response) => {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
+    path: '/',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
 
   res.json({
     message: 'Connexion réussie',
-    token,
     user: { id: user.id, email: user.email, name: user.name, role: user.role },
   });
 });
 
 router.post('/api/auth/logout', (_req: Request, res: Response) => {
-  res.clearCookie('auth_token');
+  res.clearCookie('auth_token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+  });
   res.json({ message: 'Déconnexion effectuée avec succès.' });
 });
 
@@ -477,48 +524,60 @@ router.put('/api/pages/:slug', authenticateToken, (req: Request, res: Response) 
 // 9. FILE UPLOAD ROUTE
 // ==========================================
 
-router.post('/api/upload', authenticateToken, upload.single('image'), (req: Request, res: Response) => {
-  if (!req.file) {
-    res.status(400).json({ error: 'Aucun fichier transmis ou format non supporté.' });
-    return;
-  }
+router.post('/api/upload', authenticateToken, (req: Request, res: Response) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) {
+      res.status(400).json({ error: err.message || 'Format de fichier non autorisé.' });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: 'Aucun fichier transmis ou format non supporté.' });
+      return;
+    }
 
-  // Security check: If SVG, ensure it does not contain executable script or event handlers
-  if (req.file.mimetype === 'image/svg+xml') {
+    // Binary magic bytes check on the uploaded file on disk
     try {
-      const content = fs.readFileSync(req.file.path, 'utf-8');
-      const dangerousPatterns = [
-        /<script/i,
-        /onload\s*=/i,
-        /onerror\s*=/i,
-        /onclick\s*=/i,
-        /onmouseover\s*=/i,
-        /<iframe/i,
-        /javascript:/i,
-        /<object/i,
-        /<embed/i,
-      ];
-      const hasDangerousTag = dangerousPatterns.some((pattern) => pattern.test(content));
-      if (hasDangerousTag) {
-        fs.unlinkSync(req.file.path);
+      const buffer = Buffer.alloc(16);
+      const fd = fs.openSync(req.file.path, 'r');
+      fs.readSync(fd, buffer, 0, 16, 0);
+      fs.closeSync(fd);
+
+      const detected = detectImageFormat(buffer);
+      if (!detected) {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         res.status(400).json({
-          error: 'Fichier SVG non autorisé : les scripts exécutables et événements interactifs sont interdits pour des raisons de sécurité.',
+          error: 'Contenu du fichier non valide : la signature binaire ne correspond pas à une image JPEG, PNG ou WEBP authentique.',
         });
         return;
       }
-    } catch (err) {
+
+      const ext = path.extname(req.file.filename).toLowerCase();
+      const validExtensions: Record<AllowedImageType, string[]> = {
+        png: ['.png'],
+        jpeg: ['.jpg', '.jpeg'],
+        webp: ['.webp'],
+      };
+
+      if (!validExtensions[detected].includes(ext)) {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        res.status(400).json({
+          error: "L'extension du fichier ne correspond pas au format binaire réel détecté.",
+        });
+        return;
+      }
+    } catch {
       if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       res.status(500).json({ error: 'Erreur lors du contrôle de sécurité du fichier.' });
       return;
     }
-  }
 
-  const fileUrl = `/uploads/${req.file.filename}`;
-  res.json({
-    message: 'Image téléversée avec succès.',
-    url: fileUrl,
-    filename: req.file.filename,
-    size: req.file.size,
+    const fileUrl = `/uploads/${req.file.filename}`;
+    res.json({
+      message: 'Image téléversée avec succès.',
+      url: fileUrl,
+      filename: req.file.filename,
+      size: req.file.size,
+    });
   });
 });
 

@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+tests
+*.test.ts
+.env*
+!.env.example
+*.tmp
+data/*.tmp
+coverage
+dist
+.DS_Store
